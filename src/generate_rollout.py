@@ -29,6 +29,9 @@ class TurtleBot:
         self.policy           = 1 / 11 * np.ones(11)
 
         self.wall_dist        = 0.4 # meters
+            
+        self.model            = None
+
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -63,27 +66,32 @@ class TurtleBot:
 
 if __name__ == "__main__":
     tb = TurtleBot()
-    time.sleep(2)
+    time.sleep(1)
     i = 0
+    rollout = []
+    reward = None
+    time_start = None
+    time_end = None
     while not rospy.is_shutdown():
-        os.system("rosservice call /gazebo/pause_physics")
-        if i % 2 == 0:
-            tb.set_velocity([0.1, 0, 0], None)        # set the forward velocity
-            print("...slow...:", i)
-            #print("front = ", np.round(tb.lidar[0], 2))
-            #print("left = ", np.round(tb.lidar[90], 2))
-            #print("back = ", np.round(tb.lidar[180], 2))
-            #print("right = ", np.round(tb.lidar[275], 2))
-        else:
-            tb.set_velocity([0.5, 0, 0], None)        # set the forward velocity
-            print("...fast...:", i)
-           
-        os.system("rosservice call /gazebo/unpause_physics")
+        time_start = time.time()
+        if i == 10:
+            break
         if i != 0:
+            # get the reward
             reward = tb.get_reward()
-            print(reward)
-        time.sleep(1)
-        i += 1
+            rollout.append(reward)
+        #os.system("rosservice call /gazebo/pause_physics")
 
+        # Sample Action (uniform currently, set the probability distribution using model)
+        at = np.random.choice(tb.actions, 1) 
+        
+        # take action in the simulation for 1 second
+        #os.system("rosservice call /gazebo/unpause_physics")
+
+        #time.sleep(0.1)
+        i += 1
+        time_end =time.time()
+        if i <= 10:
+            print("iteration {} = {}".format(i, time_end - time_start))
     # reset simulation once
     os.system("rosservice call /gazebo/reset_simulation")
