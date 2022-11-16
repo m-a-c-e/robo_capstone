@@ -10,6 +10,8 @@ from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Vector3
 
+from test_pytorch import Actor
+
 
 class TurtleBot:
     def __init__(self):
@@ -66,12 +68,22 @@ class TurtleBot:
 
 if __name__ == "__main__":
     tb = TurtleBot()
+#    nn_actor = Actor(tb.
+    ### need some time to initialize the lidar readings
     time.sleep(1)
+    ############################
+    print(tb.actions.size)
+
+    nn_actor = Actor(91, tb.actions.size)
+
     i = 0
-    rollout = []
+    reward_rollout = []
+    action_rollout = []
+    state_rollout  = []
     reward = None
     time_start = None
     time_end = None
+    time_step_list = []
     while not rospy.is_shutdown():
         time_start = time.time()
         if i == 10:
@@ -79,11 +91,17 @@ if __name__ == "__main__":
         if i != 0:
             # get the reward
             reward = tb.get_reward()
-            rollout.append(reward)
+            state  = tb.lidar[44:135]   # 91 lidar readings
+            
+            # store action, state and reward for each time step
+            reward_rollout.append(reward)
+            action_rollout.append(action)
+            state_rollout.append(state)
+
         #os.system("rosservice call /gazebo/pause_physics")
 
         # Sample Action (uniform currently, set the probability distribution using model)
-        at = np.random.choice(tb.actions, 1) 
+        action = np.random.choice(tb.actions, 1)[0]
         
         # take action in the simulation for 1 second
         #os.system("rosservice call /gazebo/unpause_physics")
@@ -92,6 +110,22 @@ if __name__ == "__main__":
         i += 1
         time_end =time.time()
         if i <= 10:
-            print("iteration {} = {}".format(i, time_end - time_start))
+            ts = time_end - time_start
+            print("iteration {} = {}".format(i, ts))
+            time_step_list.append(ts)
+    time_step_list = np.mean(np.array(time_step_list))
+
+
+    action_rollout = np.expand_dims(np.array(action_rollout).astype(np.float32), axis=1)
+    state_rollout  = np.array(state_rollout).astype(np.float32)
+    reward_rollout = np.expand_dims(np.array(reward_rollout).astype(np.float32), axis=1)
+
+    print("## reward_rollout ##")
+    print(reward_rollout.shape, reward_rollout.dtype)
+    print("## action_rollout ##")
+    print(action_rollout.shape, reward_rollout.dtype)
+    print("## state_rollout ##")
+    print(state_rollout.shape, state_rollout.dtype)
+    # print(time_step_list)
     # reset simulation once
     os.system("rosservice call /gazebo/reset_simulation")
