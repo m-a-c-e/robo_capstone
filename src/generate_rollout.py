@@ -5,12 +5,14 @@ import rospy
 import os
 import time
 import numpy as np
+import torch
 
 from sensor_msgs.msg import LaserScan
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import Vector3
 
 from test_pytorch import Actor
+
 
 
 class TurtleBot:
@@ -68,51 +70,53 @@ class TurtleBot:
 
 if __name__ == "__main__":
     tb = TurtleBot()
-#    nn_actor = Actor(tb.
+
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-    print(tb.actions.size)
 
-    nn_actor = Actor(91, tb.actions.size)
+    nn_actor = Actor(tb.lidar.size, tb.actions.size).to(torch.float64)
 
     i = 0
     reward_rollout = []
     action_rollout = []
     state_rollout  = []
-    reward = None
-    time_start = None
-    time_end = None
+    state          = None
+    action         = None
+    reward         = None
+    time_start     = None
+    time_end       = None
     time_step_list = []
     while not rospy.is_shutdown():
         time_start = time.time()
-        if i == 10:
-            break
-        if i != 0:
-            # get the reward
-            reward = tb.get_reward()
-            state  = tb.lidar[44:135]   # 91 lidar readings
-            
-            # store action, state and reward for each time step
-            reward_rollout.append(reward)
-            action_rollout.append(action)
-            state_rollout.append(state)
+        # os.system("rosservice call /gazebo/pause_physics")
 
-        #os.system("rosservice call /gazebo/pause_physics")
+        # state
+        state = torch.from_numpy(tb.lidar).to(torch.float64)
 
-        # Sample Action (uniform currently, set the probability distribution using model)
-        action = np.random.choice(tb.actions, 1)[0]
+        # action
+        action_probs = nn_actor.forward(state).detach().numpy()
+        action       = np.random.choice(tb.actions, 1, p=action_probs)[0]
         
-        # take action in the simulation for 1 second
+        # take action in the simulation
         #os.system("rosservice call /gazebo/unpause_physics")
 
-        #time.sleep(0.1)
+        # collect reward from taking the action
+        reward = tb.get_reward()
+
+        # store action, state and reward for each time step
+        reward_rollout.append(reward)
+        action_rollout.append(action)
+        state_rollout.append(state.detach().numpy())
+
         i += 1
         time_end =time.time()
-        if i <= 10:
+        if i < 10:
             ts = time_end - time_start
             print("iteration {} = {}".format(i, ts))
             time_step_list.append(ts)
+        else:
+            break
     time_step_list = np.mean(np.array(time_step_list))
 
 
@@ -126,6 +130,6 @@ if __name__ == "__main__":
     print(action_rollout.shape, reward_rollout.dtype)
     print("## state_rollout ##")
     print(state_rollout.shape, state_rollout.dtype)
-    # print(time_step_list)
+    print(time_step_list)
     # reset simulation once
     os.system("rosservice call /gazebo/reset_simulation")

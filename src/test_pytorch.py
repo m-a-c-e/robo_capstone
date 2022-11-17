@@ -1,11 +1,11 @@
 #!/usr/bin/env python
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-print(torch.__version__)
 
 class Actor(nn.Module):
     def __init__(self, state_size, action_size):
@@ -20,6 +20,13 @@ class Actor(nn.Module):
         output = F.relu(self.linear1(state))
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
-        distribution = Categorical(F.softmax(output, dim=-1))
-        return distribution
+        output = F.softmax(output, dim=-1)
+        return output
 
+if __name__ == "__main__":
+    ac = Actor(360, 2)
+    ac = ac.to(torch.float64)
+    lidar = torch.arange(360)
+    lidar = lidar.to(torch.float64)
+    lidar = torch.unsqueeze(lidar, dim=0)
+    print(ac(lidar))
