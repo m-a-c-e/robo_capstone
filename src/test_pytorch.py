@@ -13,8 +13,8 @@ class Actor(nn.Module):
         self.state_size = state_size
         self.action_size = action_size
         self.linear1 = nn.Linear(self.state_size, 128)
-        self.linear2 = nn.Linear(128, 256)
-        self.linear3 = nn.Linear(256, self.action_size)
+        self.linear2 = nn.Linear(128, 64)
+        self.linear3 = nn.Linear(64, self.action_size)
 
     def forward(self, state):
         output = F.relu(self.linear1(state))
@@ -24,9 +24,10 @@ class Actor(nn.Module):
         return output
 
 if __name__ == "__main__":
-    ac = Actor(360, 2)
+    ac = Actor(360, 11)
     ac = ac.to(torch.float64)
     lidar = torch.arange(360)
     lidar = lidar.to(torch.float64)
     lidar = torch.unsqueeze(lidar, dim=0)
-    print(ac(lidar))
+    ans = ac(lidar)
+    print(torch.sum(ans))
