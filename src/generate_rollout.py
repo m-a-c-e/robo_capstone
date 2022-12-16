@@ -79,17 +79,29 @@ class TurtleBot:
         # calculates the reward based on the ldiar input
         # Plan to stay within 0.1 meters on the left side of the robot
         # choose array from 45 to 135 degree lidar readings and weight each with a gaussian
-        curr_lidar = np.array(self.lidar[44:135])        # create a copy of 91 readings
+        # curr_lidar = np.array(self.lidar[44:135])        # create a copy of 91 readings
+        # curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
+
+        # # create gaussian weights
+        # indices    = np.expand_dims(np.arange(curr_lidar.size), axis=0)
+        # mu  = np.mean(indices, keepdims=True)
+        # sigma = np.std(indices, keepdims=True)
+
+        # wts = (0.4 * np.exp(-(0.5) * ((indices - mu) / (sigma)) ** 2))
+        # weighted_lidar = curr_lidar * wts
+        # reward = - np.mean(weighted_lidar)
+        # return reward
+
+        
+        # test reward function
+        curr_lidar = np.array(self.lidar[43:48])        # create a copy of 91 readings
         curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
-
-        # create gaussian weights
-        indices    = np.expand_dims(np.arange(curr_lidar.size), axis=0)
-        mu  = np.mean(indices, keepdims=True)
-        sigma = np.std(indices, keepdims=True)
-
-        wts = (0.4 * np.exp(-(0.5) * ((indices - mu) / (sigma)) ** 2))
-        weighted_lidar = curr_lidar * wts
-        reward = - np.mean(weighted_lidar)
+        dist_mu = np.mean(curr_lidar)
+        reward = 0
+        if dist_mu < 0.2:
+            reward = 1
+        else:
+            reward = -1
         return reward
 
     def generate_rollout(self, max_time_steps):
@@ -114,11 +126,12 @@ class TurtleBot:
 
             # action
             action_mean = self.model.forward(state)
-            action = torch.normal(action_mean, 0.1)
+            action = torch.normal(action_mean, 0.2)
+            print(action)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
-            self.set_velocity([0.01, 0, 0],[0, 0, action.data]) 
+            self.set_velocity([0.05, 0, 0],[0, 0, action.data]) 
             #os.system("rosservice call /gazebo/unpause_physics")
             #os.system("gz world --step")
             #os.system("rosservice call /gazebo/pause_physics")
@@ -154,7 +167,7 @@ if __name__ == "__main__":
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-    iterations = 10
+    iterations = 8000
     state_rollout = None
     action_rollout = None
     reward_rollout = None
@@ -163,7 +176,7 @@ if __name__ == "__main__":
     for i in range(iterations):
         st = time.time()
         # 1. generate rollout
-        prob_rollout, reward_rollout = tb.generate_rollout(2)
+        prob_rollout, reward_rollout = tb.generate_rollout(3)
         cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
         
         # 2. calculate expected cummulative reward
@@ -186,6 +199,8 @@ if __name__ == "__main__":
         
         # 4. print metrics
         print("Iteration # : {}    Mean Reward: {}  Time: {}".format(i, torch.mean(reward_rollout).data, round(et - st, 2)))
-    torch.save(tb.model.state_dict(), "/home/mace/catkin_ws/src/robo_capstone/src/trained_models/test_model.pt")
-    os.system("rosservice call /gazebo/reset_simulation")    
+        print("Reward rollout: ".format(reward_rollout))
+        if i % 100 == 0: 
+            torch.save(tb.model.state_dict(), "/home/mace/catkin_ws/src/robo_capstone/src/trained_models/test_model_" + str(i) + ".pt")
 
+    os.system("rosservice call /gazebo/reset_simulation")    
