@@ -30,6 +30,7 @@ class TurtleBot:
 
 if __name__ == "__main__":
     tb = TurtleBot()
+    time.sleep(1)
     while not rospy.is_shutdown():
         tb.set_velocity([0.1, 0, 0], None)
         pass

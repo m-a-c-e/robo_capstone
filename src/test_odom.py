@@ -50,7 +50,6 @@ class TurtleBot:
         rospy.init_node('test_pause_play', anonymous=True)      # initialize the node with filename
         rospy.Subscriber('/scan', LaserScan, self.get_lidar, queue_size=1)	        
         self.velocity_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)	
-
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.update_Odometry) # handle to get the position
 
         self.Init = True    # only for when the robot publishes the first odometry data
@@ -108,8 +107,6 @@ class TurtleBot:
         self.globalPos.y = Mrot.item((1,0))*position.x + Mrot.item((1,1))*position.y - self.Init_pos.y		# meters
         self.globalAng = orientation - self.Init_ang			# radians
 
-
-
     def get_reward(self):
         # calculates the reward based on the ldiar input
         # Plan to stay within 0.1 meters on the left side of the robot
@@ -152,45 +149,29 @@ class TurtleBot:
         time_start     = None
         time_end       = None
         time_step_list = []
-        startx = 0
-        starty = 0
-        dist   = 0
 
         for t in range(max_time_steps):
             time_start = time.time()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
-            state = state
 
             # action
             action_mean = self.model.forward(state)
             action = torch.normal(action_mean, 0.2)
+            print(action)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
-            print("prob is on ", prob)
 
             # take action in the simulation
-            action = action.cpu()
-            self.set_velocity([0.1, 0, 0],[0, 0, action.data]) 
-            # os.system("rosservice call /gazebo/unpause_physics")
-            # os.system("gz world --step")
-            # os.system("rosservice call /gazebo/pause_physics")
+            self.set_velocity([0.05, 0, 0],[0, 0, action.data]) 
+            #os.system("rosservice call /gazebo/unpause_physics")
+            #os.system("gz world --step")
+            #os.system("rosservice call /gazebo/pause_physics")
             # time step ~ 1.08 seconds
             time.sleep(1)
 
-            currx = round(self.globalPos.x, 2)
-            curry = round(self.globalPos.y, 2)
-            dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
-            startx = currx
-            starty = curry
-
-    
             # collect reward from taking the action
-            reward = 0
-            if dist <= 0.001:
-                reward = 0      # in case of collision
-            else:
-                reward = self.get_reward() # in all other cases
+            reward = self.get_reward()
 
             # store reward and probabilities for each time step
             reward_rollout.append(reward)
@@ -218,46 +199,17 @@ if __name__ == "__main__":
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-    iterations = 8000
-    state_rollout = None
-    action_rollout = None
-    reward_rollout = None
-    gamma = torch.tensor(0.99, dtype=torch.float64, requires_grad=False)
-    st = None
-    max_time_steps = 5
-
+    startx = 0
+    starty = 0
+    dist = 0
     while not rospy.is_shutdown ():
-        for i in range(iterations):
-            st = time.time()
-            # 1. generate rollout
-            prob_rollout, reward_rollout = tb.generate_rollout(max_time_steps)
-            cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
-            
-            # 2. calculate expected cummulative reward
-            T_terminal = reward_rollout.size()[0]
-            for j in range(T_terminal):
-                cum_reward = 0
-                for k in range(j, T_terminal):
-                    diff = torch.tensor(k - j, dtype=torch.float64, requires_grad=False)
-                    cum_reward += torch.pow(gamma, diff) * reward_rollout[j] 
-                cum_reward_rollout[j] = cum_reward 
-
-            # 3. multiply reward with the log probs
-            cum_reward_rollout = cum_reward_rollout
-            loss = cum_reward_rollout * torch.log(prob_rollout)
-            loss = torch.mean(loss, dim=0)
-            loss = -1 * loss # for gradient ascent
-            loss.backward()
-            tb.optimizer.step()
-            tb.optimizer.zero_grad()
-            et = time.time()
-            
-            # 4. print metrics
-            print("Iteration # : {}    Mean Reward: {}  Time: {}".format(i, torch.mean(reward_rollout).data, round(et - st, 2)))
-            print("Reward rollout: ".format(reward_rollout))
-            if i % 100 == 0: 
-                torch.save(tb.model.state_dict(), "/home/manan/catkin_ws/src/robo_capstone/src/trained_models/test_model_" + str(i) + ".pt")
-
-        os.system("rosservice call /gazebo/reset_simulation")    
+        tb.set_velocity([0, 0, 0], [0, 0, 0])
+        currx = round(tb.globalPos.x, 2)
+        curry = round(tb.globalPos.y, 2)
+        dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
+        print(dist)
+        startx = currx
+        starty = curry
+        time.sleep(1)
+        
     os.system("rosservice call /gazebo/reset_simulation")    
-os.system("rosservice call /gazebo/reset_simulation")    
