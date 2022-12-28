@@ -25,7 +25,9 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 import keyboard
-
+from datetime import datetime
+import json
+import sys
 
 class Actor(nn.Module):
     def __init__(self, state_size, action_size):
@@ -45,7 +47,7 @@ class Actor(nn.Module):
 
 
 class TurtleBot:
-    def __init__(self):
+    def __init__(self, args_dict):
         # nodes, subscribers and publishers
         rospy.init_node('test_pause_play', anonymous=True)      # initialize the node with filename
         rospy.Subscriber('/scan', LaserScan, self.get_lidar, queue_size=1)	        
@@ -69,10 +71,36 @@ class TurtleBot:
 
         self.num_actions      = 1
             
-        self.model            = Actor(self.lidar.size, self.num_actions).to(torch.float64)
-        self.optimizer        = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
 
-        self.sigma = 0.1
+        # params
+        self.args_dict = args_dict
+        print(args_dict)
+        self.sigma = args_dict['sigma']
+        self.lidar_start = args_dict['lidar_start']
+        self.lidar_end = args_dict['lidar_end']
+        self.cnst_vel = args_dict['cnst_vel']
+        self.allowed_error = args_dict['allowed_error']
+        self.p_reward = args_dict['p_reward']
+        self.n_reward = args_dict['n_reward']
+        self.max_time_steps = args_dict['max_time_steps']
+        self.load_model = args_dict['model_path']
+        
+#        self.args_dict = {"sigma": self.sigma, 
+#                          "lidar_start": self.lidar_start, 
+#                          "lidar_end": self.lidar_end, 
+#                          "cnst_vel": self.cnst_vel, 
+#                          "allowed_error": self.allowed_error, 
+#                          "p_reward": self.p_reward, 
+#                          "n_reward": self.n_reward, 
+#                          "max_time_steps": self.max_time_steps}
+        self.optimizer = None
+        if self.load_model == '':
+            self.model            = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+            self.optimizer        = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
+        else:
+            self.model = torch.load(path)
+            self.model.eval()
+
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -129,17 +157,17 @@ class TurtleBot:
 
         
         # test reward function
-        curr_lidar = np.array(self.lidar[43:48])        # create a copy of 91 readings
+        curr_lidar = np.array(self.lidar[self.lidar_start:self.lidar_end])        # create a copy of 91 readings
         curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
         dist_mu = np.mean(curr_lidar)
         reward = 0
-        if dist_mu < 0.2:
-            reward = 1
+        if dist_mu < self.allowed_error:
+            reward = self.p_reward
         else:
-            reward = -1
+            reward = self.n_reward
         return reward
 
-    def generate_rollout(self, max_time_steps):
+    def generate_rollout(self):
         i = 0
         reward_rollout = []
         action_rollout = []
@@ -156,7 +184,7 @@ class TurtleBot:
         starty = 0
         dist   = 0
 
-        for t in range(max_time_steps):
+        for t in range(self.max_time_steps):
             time_start = time.time()
 
             # state
@@ -165,13 +193,12 @@ class TurtleBot:
 
             # action
             action_mean = self.model.forward(state)
-            action = torch.normal(action_mean, 0.2)
+            action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
-            print("prob is on ", prob)
 
             # take action in the simulation
             action = action.cpu()
-            self.set_velocity([0.1, 0, 0],[0, 0, action.data]) 
+            self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
             # os.system("rosservice call /gazebo/pause_physics")
@@ -213,7 +240,13 @@ class TurtleBot:
         return (prob_rollout, reward_rollout)
 
 if __name__ == "__main__":
-    tb = TurtleBot()
+    args = sys.argv
+    json_file = args[1]
+    json_file = open(json_file,"r")
+    args_dict = json.load(json_file)
+    #print(args_dict['n_reward'])
+
+    tb = TurtleBot(args_dict)
 
     ### need some time to initialize the lidar readings
     time.sleep(1)
@@ -224,13 +257,12 @@ if __name__ == "__main__":
     reward_rollout = None
     gamma = torch.tensor(0.99, dtype=torch.float64, requires_grad=False)
     st = None
-    max_time_steps = 5
 
     while not rospy.is_shutdown ():
         for i in range(iterations):
             st = time.time()
             # 1. generate rollout
-            prob_rollout, reward_rollout = tb.generate_rollout(max_time_steps)
+            prob_rollout, reward_rollout = tb.generate_rollout()
             cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
             
             # 2. calculate expected cummulative reward
@@ -254,9 +286,22 @@ if __name__ == "__main__":
             
             # 4. print metrics
             print("Iteration # : {}    Mean Reward: {}  Time: {}".format(i, torch.mean(reward_rollout).data, round(et - st, 2)))
-            print("Reward rollout: ".format(reward_rollout))
             if i % 100 == 0: 
-                torch.save(tb.model, "/home/manan/catkin_ws/src/robo_capstone/src/trained_models/test_model_" + str(i) + ".pt")
+                now = datetime.now()
+                date_string = now.strftime("%d-%m-%Y/")
+                time_string = now.strftime("%H-%M-%S_")
+                dir_path = "/home/manan/catkin_ws/src/robo_capstone/src/trained_models/" + date_string
+                if os.path.exists(dir_path):
+                    pass
+                else:
+                    os.makedirs(dir_path)
+                tb.args_dict['load_model'] = dir_path + time_string + str(i) + ".pt"
+                torch.save(tb.model, dir_path + time_string + str(i) + ".pt")
+                args_file = open(dir_path + time_string + str(i) + ".json", 'w')
+                args_json = json.dumps(tb.args_dict)
+                args_file.write(args_json)
+                args_file.close()
+
 
         os.system("rosservice call /gazebo/reset_simulation")    
     os.system("rosservice call /gazebo/reset_simulation")    

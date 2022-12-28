@@ -25,7 +25,9 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 import keyboard
-
+from datetime import datetime
+import json
+import sys
 
 class Actor(nn.Module):
     def __init__(self, state_size, action_size):
@@ -45,11 +47,12 @@ class Actor(nn.Module):
 
 
 class TurtleBot:
-    def __init__(self):
+    def __init__(self, args_dict):
         # nodes, subscribers and publishers
         rospy.init_node('test_pause_play', anonymous=True)      # initialize the node with filename
         rospy.Subscriber('/scan', LaserScan, self.get_lidar, queue_size=1)	        
         self.velocity_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=1)	
+
         self.odom_sub = rospy.Subscriber('/odom', Odometry, self.update_Odometry) # handle to get the position
 
         self.Init = True    # only for when the robot publishes the first odometry data
@@ -71,7 +74,26 @@ class TurtleBot:
         self.model            = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         self.optimizer        = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
 
-        self.sigma = 0.1
+        # params
+        self.args_dict = args_dict
+        print(args_dict)
+        self.sigma = args_dict['sigma']
+        self.lidar_start = args_dict['lidar_start']
+        self.lidar_end = args_dict['lidar_end']
+        self.cnst_vel = args_dict['cnst_vel']
+        self.allowed_error = args_dict['allowed_error']
+        self.p_reward = args_dict['p_reward']
+        self.n_reward = args_dict['n_reward']
+        self.max_time_steps = args_dict['max_time_steps']
+        
+#        self.args_dict = {"sigma": self.sigma, 
+#                          "lidar_start": self.lidar_start, 
+#                          "lidar_end": self.lidar_end, 
+#                          "cnst_vel": self.cnst_vel, 
+#                          "allowed_error": self.allowed_error, 
+#                          "p_reward": self.p_reward, 
+#                          "n_reward": self.n_reward, 
+#                          "max_time_steps": self.max_time_steps}
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -107,6 +129,8 @@ class TurtleBot:
         self.globalPos.y = Mrot.item((1,0))*position.x + Mrot.item((1,1))*position.y - self.Init_pos.y		# meters
         self.globalAng = orientation - self.Init_ang			# radians
 
+
+
     def get_reward(self):
         # calculates the reward based on the ldiar input
         # Plan to stay within 0.1 meters on the left side of the robot
@@ -126,17 +150,17 @@ class TurtleBot:
 
         
         # test reward function
-        curr_lidar = np.array(self.lidar[43:48])        # create a copy of 91 readings
+        curr_lidar = np.array(self.lidar[self.lidar_start:self.lidar_end])        # create a copy of 91 readings
         curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
         dist_mu = np.mean(curr_lidar)
         reward = 0
-        if dist_mu < 0.2:
-            reward = 1
+        if dist_mu < self.allowed_error:
+            reward = self.p_reward
         else:
-            reward = -1
+            reward = self.n_reward
         return reward
 
-    def generate_rollout(self, max_time_steps):
+    def generate_rollout(self):
         i = 0
         reward_rollout = []
         action_rollout = []
@@ -149,29 +173,44 @@ class TurtleBot:
         time_start     = None
         time_end       = None
         time_step_list = []
+        startx = 0
+        starty = 0
+        dist   = 0
 
-        for t in range(max_time_steps):
+        for t in range(self.max_time_steps):
             time_start = time.time()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
+            state = state
 
             # action
             action_mean = self.model.forward(state)
-            action = torch.normal(action_mean, 0.2)
-            print(action)
+            action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
-            self.set_velocity([0.05, 0, 0],[0, 0, action.data]) 
-            #os.system("rosservice call /gazebo/unpause_physics")
-            #os.system("gz world --step")
-            #os.system("rosservice call /gazebo/pause_physics")
+            action = action.cpu()
+            self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+            # os.system("rosservice call /gazebo/unpause_physics")
+            # os.system("gz world --step")
+            # os.system("rosservice call /gazebo/pause_physics")
             # time step ~ 1.08 seconds
             time.sleep(1)
 
+            currx = round(self.globalPos.x, 2)
+            curry = round(self.globalPos.y, 2)
+            dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
+            startx = currx
+            starty = curry
+
+    
             # collect reward from taking the action
-            reward = self.get_reward()
+            reward = 0
+            if dist <= 0.001:
+                reward = 0      # in case of collision
+            else:
+                reward = self.get_reward() # in all other cases
 
             # store reward and probabilities for each time step
             reward_rollout.append(reward)
@@ -194,7 +233,12 @@ class TurtleBot:
         return (prob_rollout, reward_rollout)
 
 if __name__ == "__main__":
-    tb = TurtleBot()
+    args = sys.argv
+    json_file = args[1]
+    json_file = open(json_file,"r")
+    args_dict = json.load(json_file)
+
+    tb = TurtleBot(args_dict)
 
     ### need some time to initialize the lidar readings
     time.sleep(1)
@@ -204,16 +248,12 @@ if __name__ == "__main__":
     starty = 0
     dist = 0
 
-    # load model
-    path = "/home/manan/catkin_ws/src/robo_capstone/src/trained_models/test_model_0.pt"
-    model = torch.load(path)
-    model.eval()
-
     while not rospy.is_shutdown ():
         state = torch.from_numpy(tb.lidar).to(torch.float64)
-        action_mean = model.forward(state)
+        action_mean = tb.model.forward(state)
 
-        tb.set_velocity([0.1, 0, 0],[0, 0, action_mean.data]) 
+        tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
+        print(action_mean.data)
 
         #currx = round(tb.globalPos.x, 2)
         #curry = round(tb.globalPos.y, 2)

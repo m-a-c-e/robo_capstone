@@ -24,10 +24,14 @@ class Actor(nn.Module):
         return output
 
 if __name__ == "__main__":
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(device)
     ac = Actor(360, 11)
+    ac = ac.to('cuda:0')
     ac = ac.to(torch.float64)
     lidar = torch.arange(360)
     lidar = lidar.to(torch.float64)
     lidar = torch.unsqueeze(lidar, dim=0)
+
     ans = ac(lidar)
     print(torch.sum(ans))
