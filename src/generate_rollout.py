@@ -83,7 +83,7 @@ class TurtleBot:
         self.p_reward = args_dict['p_reward']
         self.n_reward = args_dict['n_reward']
         self.max_time_steps = args_dict['max_time_steps']
-        self.load_model = args_dict['model_path']
+        self.load_model = args_dict['load_model']
         
 #        self.args_dict = {"sigma": self.sigma, 
 #                          "lidar_start": self.lidar_start, 
@@ -93,13 +93,12 @@ class TurtleBot:
 #                          "p_reward": self.p_reward, 
 #                          "n_reward": self.n_reward, 
 #                          "max_time_steps": self.max_time_steps}
-        self.optimizer = None
         if self.load_model == '':
-            self.model            = Actor(self.lidar.size, self.num_actions).to(torch.float64)
-            self.optimizer        = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
+            self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         else:
-            self.model = torch.load(path)
-            self.model.eval()
+            self.model = torch.load(self.load_model)
+
+        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
 
 
     def set_velocity(self, v_in, w_in):
@@ -111,7 +110,7 @@ class TurtleBot:
         self.velocity_pub.publish(self.velocity)
 
     def get_lidar(self, data):
-        ranges = np.clip(np.array(data.ranges), 0.3, 5)     # clip between 0.3 and 5 meters
+        ranges = np.clip(np.array(data.ranges), 0.0, 5)     # clip between 0.3 and 5 meters
                                                             # due to measurement limiations
         self.lidar = np.array(ranges)  # contains 360 dists (in meters) {0, 1, ... , 359}
 
