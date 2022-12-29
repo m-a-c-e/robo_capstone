@@ -43,7 +43,6 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output = output / 2
         return output
 
 
@@ -68,6 +67,7 @@ class TurtleBot:
 
         self.lidar            = np.zeros(360)
 
+        
         self.num_actions      = 1
             
 
@@ -83,8 +83,17 @@ class TurtleBot:
         self.n_reward = args_dict['n_reward']
         self.max_time_steps = args_dict['max_time_steps']
         self.load_model = args_dict['load_model']
-        self.wall_dist = args_dict['wall_dist']
+        self.wall_dist = args_dict['wall_dist'] # meters
+
         
+#        self.args_dict = {"sigma": self.sigma, 
+#                          "lidar_start": self.lidar_start, 
+#                          "lidar_end": self.lidar_end, 
+#                          "cnst_vel": self.cnst_vel, 
+#                          "allowed_error": self.allowed_error, 
+#                          "p_reward": self.p_reward, 
+#                          "n_reward": self.n_reward, 
+#                          "max_time_steps": self.max_time_steps}
         if self.load_model == '':
             self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         else:
@@ -102,8 +111,9 @@ class TurtleBot:
         self.velocity_pub.publish(self.velocity)
 
     def get_lidar(self, data):
-        ranges = np.clip(np.array(data.ranges), 0.15, 3.5)     # clip between 0.3 and 5 meters
+        ranges = np.clip(np.array(data.ranges), 0.0, 5)     # clip between 0.3 and 5 meters
                                                             # due to measurement limiations
+        ranges = np.array(data.ranges)
         self.lidar = np.array(ranges)  # contains 360 dists (in meters) {0, 1, ... , 359}
 
     def update_Odometry(self, Odom):
@@ -148,10 +158,10 @@ class TurtleBot:
         fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
         fwd_lidar -= self.wall_dist
         fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
-
+        print(fwd_lidar)
         reward += np.sum(fwd_lidar)
 
-        return reward
+        return reward, curr_lidar
 
     def generate_rollout(self):
         i = 0
@@ -225,38 +235,25 @@ class TurtleBot:
         # return state, action, reward tuple
         return (prob_rollout, reward_rollout)
 
-
-
-
 if __name__ == "__main__":
     args = sys.argv
     json_file = args[1]
     json_file = open(json_file,"r")
     args_dict = json.load(json_file)
+    #print(args_dict['n_reward'])
 
     tb = TurtleBot(args_dict)
-    tb.model.eval()
 
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-
-    startx = 0
-    starty = 0
-    dist = 0
-
     while not rospy.is_shutdown ():
-        state = torch.from_numpy(tb.lidar).to(torch.float64)
-        action_mean = tb.model.forward(state)
+        avg_dist = np.mean(tb.lidar[88:93])
+        reward, curr_lidar = tb.get_reward()
+        print("reward: ", reward, "avg_dist: ", avg_dist)
 
-        tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
-        print(action_mean.data)
-
-        currx = round(tb.globalPos.x, 2)
-        curry = round(tb.globalPos.y, 2)
-        #dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
-        #startx = currx
-        #starty = curry
-        print("x: ", currx, "y: ", curry)
+        #print(reward, curr_lidar)
         time.sleep(1)
+
     os.system("rosservice call /gazebo/reset_simulation")    
+os.system("rosservice call /gazebo/reset_simulation")    

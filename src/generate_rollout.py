@@ -43,6 +43,7 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
+        output = output / 2
         return output
 
 
@@ -67,8 +68,6 @@ class TurtleBot:
 
         self.lidar            = np.zeros(360)
 
-        self.wall_dist        = 0.4 # meters
-
         self.num_actions      = 1
             
 
@@ -84,15 +83,8 @@ class TurtleBot:
         self.n_reward = args_dict['n_reward']
         self.max_time_steps = args_dict['max_time_steps']
         self.load_model = args_dict['load_model']
-        
-#        self.args_dict = {"sigma": self.sigma, 
-#                          "lidar_start": self.lidar_start, 
-#                          "lidar_end": self.lidar_end, 
-#                          "cnst_vel": self.cnst_vel, 
-#                          "allowed_error": self.allowed_error, 
-#                          "p_reward": self.p_reward, 
-#                          "n_reward": self.n_reward, 
-#                          "max_time_steps": self.max_time_steps}
+        self.wall_dist = args_dict['wall_dist']
+       
         if self.load_model == '':
             self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         else:
@@ -110,7 +102,7 @@ class TurtleBot:
         self.velocity_pub.publish(self.velocity)
 
     def get_lidar(self, data):
-        ranges = np.clip(np.array(data.ranges), 0.0, 5)     # clip between 0.3 and 5 meters
+        ranges = np.clip(np.array(data.ranges), 0.15, 3.5)     # clip between 0.3 and 5 meters
                                                             # due to measurement limiations
         self.lidar = np.array(ranges)  # contains 360 dists (in meters) {0, 1, ... , 359}
 
@@ -138,32 +130,27 @@ class TurtleBot:
 
 
     def get_reward(self):
-        # calculates the reward based on the ldiar input
-        # Plan to stay within 0.1 meters on the left side of the robot
-        # choose array from 45 to 135 degree lidar readings and weight each with a gaussian
-        # curr_lidar = np.array(self.lidar[44:135])        # create a copy of 91 readings
-        # curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
-
-        # # create gaussian weights
-        # indices    = np.expand_dims(np.arange(curr_lidar.size), axis=0)
-        # mu  = np.mean(indices, keepdims=True)
-        # sigma = np.std(indices, keepdims=True)
-
-        # wts = (0.4 * np.exp(-(0.5) * ((indices - mu) / (sigma)) ** 2))
-        # weighted_lidar = curr_lidar * wts
-        # reward = - np.mean(weighted_lidar)
-        # return reward
-
-        
-        # test reward function
-        curr_lidar = np.array(self.lidar[self.lidar_start:self.lidar_end])        # create a copy of 91 readings
-        curr_lidar = np.abs(curr_lidar - self.wall_dist) # get the distance to wall
-        dist_mu = np.mean(curr_lidar)
+        curr_lidar = np.array(self.lidar)
+        left_lidar = np.array(curr_lidar[self.lidar_start:self.lidar_end])
+        ang_comp = np.cos(np.arange(-2, 3, 1) * np.pi / 180)
+        left_lidar = left_lidar * ang_comp
+        left_lidar = np.abs(left_lidar - self.wall_dist) # get the distance to wall
+        dist_mu = np.mean(left_lidar)
         reward = 0
+
+        # reward for staying parallel to the wall
         if dist_mu < self.allowed_error:
-            reward = self.p_reward
+            reward += self.p_reward
         else:
-            reward = self.n_reward
+            reward += self.n_reward
+
+        # penalty for not avoiding the wall
+        fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
+        fwd_lidar -= self.wall_dist
+        fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
+
+        reward += np.sum(fwd_lidar)
+
         return reward
 
     def generate_rollout(self):
