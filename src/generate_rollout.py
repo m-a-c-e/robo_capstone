@@ -171,11 +171,23 @@ class TurtleBot:
         dist   = 0
 
         for t in range(self.max_time_steps):
-            time_start = time.time()
+            # state
+            state = torch.from_numpy(self.lidar).to(torch.float64)
+
+            if t < 5:
+                self.model.eval()
+                with torch.no_grad():
+                    # action
+                    action_mean = self.model.forward(state)
+                    # take action in the simulation
+                    self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
+                    time.sleep(1)
+                    continue
+            else:
+                self.model.train()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
-            state = state
 
             # action
             action_mean = self.model.forward(state)
@@ -183,7 +195,6 @@ class TurtleBot:
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
-            action = action.cpu()
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
@@ -191,30 +202,15 @@ class TurtleBot:
             # time step ~ 1.08 seconds
             time.sleep(1)
 
-            currx = round(self.globalPos.x, 2)
-            curry = round(self.globalPos.y, 2)
-            dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
-            startx = currx
-            starty = curry
-
-    
             # collect reward from taking the action
-            reward = 0
-            if dist <= 0.001:
-                reward = 0      # in case of collision
-            else:
-                reward = self.get_reward() # in all other cases
+            reward = self.get_reward() # in all other cases
 
             # store reward and probabilities for each time step
             reward_rollout.append(reward)
             prob_rollout.append(prob)
 
-            time_end = time.time()
-            ts       = time_end - time_start
-            time_step_list.append(ts)
-            # print("Iteration {}, action {}".format(t, action.data))
+            # decide whether to end rollout or not
 
-        time_step_list = torch.mean(torch.tensor(time_step_list, dtype=torch.float64))
         reward_rollout = torch.unsqueeze(torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64), dim=1)
 
         # normalize rewards between 0 and 1
@@ -222,7 +218,6 @@ class TurtleBot:
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
-        # return state, action, reward tuple
         return (prob_rollout, reward_rollout)
 
 if __name__ == "__main__":

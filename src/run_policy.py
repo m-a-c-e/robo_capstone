@@ -245,18 +245,14 @@ if __name__ == "__main__":
     starty = 0
     dist = 0
 
+    tb.model.eval()
     while not rospy.is_shutdown ():
-        state = torch.from_numpy(tb.lidar).to(torch.float64)
-        action_mean = tb.model.forward(state)
+        with torch.no_grad():
+            state = torch.from_numpy(tb.lidar).to(torch.float64)
+            action_mean = tb.model.forward(state)
 
-        tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
-        print(action_mean.data)
+            tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
+            print(action_mean.data)
 
-        currx = round(tb.globalPos.x, 2)
-        curry = round(tb.globalPos.y, 2)
-        #dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
-        #startx = currx
-        #starty = curry
-        print("x: ", currx, "y: ", curry)
-        time.sleep(1)
+            time.sleep(1)
     os.system("rosservice call /gazebo/reset_simulation")    
