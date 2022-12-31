@@ -43,7 +43,6 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output = output / 2
         return output
 
 
@@ -185,10 +184,9 @@ class TurtleBot:
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
-            normalized_state = (state - 0.15) / (3.5 - 0.15)
 
             # action
-            action_mean = self.model.forward(normalized_state)
+            action_mean = self.model.forward(state)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
@@ -241,9 +239,7 @@ if __name__ == "__main__":
     while not rospy.is_shutdown ():
         with torch.no_grad():
             state = torch.from_numpy(tb.lidar).to(torch.float64)
-            #normalised_state = (state - 0.15) / (3.5 - 0.15)
-            normalised_state = state
-            action_mean = tb.model.forward(normalised_state)
+            action_mean = tb.model.forward(state)
             tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
             print(action_mean.data)
 

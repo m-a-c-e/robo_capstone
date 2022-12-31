@@ -43,7 +43,6 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output = output / 2
         return output
 
 
@@ -186,15 +185,16 @@ class TurtleBot:
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
-            normalized_state = (state - 0.15) / (3.5 - 0.15)
 
             # action
-            action_mean = self.model.forward(normalized_state)
+            self.optimizer.zero_grad()
+            action_mean = self.model(state)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
             # os.system("rosservice call /gazebo/pause_physics")
@@ -262,7 +262,6 @@ if __name__ == "__main__":
             loss = -1 * loss # for gradient ascent
             loss.backward()
             tb.optimizer.step()
-            tb.optimizer.zero_grad()
             et = time.time()
             
             # 4. print metrics
