@@ -147,13 +147,13 @@ class TurtleBot:
         # penalty for not avoiding the wall
         fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
         fwd_lidar -= self.wall_dist
-        fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
+        fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
         reward += np.sum(fwd_lidar)
 
         return reward
 
-    def generate_rollout(self):
+    def generate_rollout(self, eval_time_steps):
         i = 0
         reward_rollout = []
         action_rollout = []
@@ -170,11 +170,11 @@ class TurtleBot:
         starty = 0
         dist   = 0
 
-        for t in range(self.max_time_steps):
+        for t in range(self.max_time_steps + eval_time_steps):
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
 
-            if t < 5:
+            if t < eval_time_steps:
                 self.model.eval()
                 with torch.no_grad():
                     # action
@@ -238,12 +238,13 @@ if __name__ == "__main__":
     reward_rollout = None
     gamma = torch.tensor(0.99, dtype=torch.float64, requires_grad=False)
     st = None
+    eval_time_steps = 0
 
     while not rospy.is_shutdown ():
         for i in range(iterations):
             st = time.time()
             # 1. generate rollout
-            prob_rollout, reward_rollout = tb.generate_rollout()
+            prob_rollout, reward_rollout = tb.generate_rollout(eval_time_steps)
             cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
             
             # 2. calculate expected cummulative reward
@@ -267,7 +268,9 @@ if __name__ == "__main__":
             
             # 4. print metrics
             print("Iteration # : {}    Mean Reward: {}  Time: {}".format(i, torch.mean(reward_rollout).data, round(et - st, 2)))
-            if i % 100 == 0: 
+            if i % 200 == 0 and i != 0: 
+                #eval_time_steps += 1
+
                 now = datetime.now()
                 date_string = now.strftime("%d-%m-%Y/")
                 time_string = now.strftime("%H-%M-%S_")

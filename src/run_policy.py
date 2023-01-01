@@ -85,6 +85,7 @@ class TurtleBot:
         self.load_model = args_dict['load_model']
         self.wall_dist = args_dict['wall_dist']
         
+        self.model = None
         if self.load_model == '':
             self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         else:
