@@ -84,17 +84,19 @@ class TurtleBot:
         self.load_model = args_dict['load_model']
         self.wall_dist = args_dict['wall_dist']
        
-        self.model = None
+        self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+        self.optimizer = None
+
         if self.load_model == '':
             print("Initialising model...")
-            self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
-
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            pass
         else:
             print("loading saved model...")
-            self.model = torch.load(self.load_model)
-
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
-
+            checkpoint = torch.load(self.load_model)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -180,15 +182,13 @@ class TurtleBot:
         dist   = 0
 
         for t in range(self.max_time_steps):
-            # state
-            state = torch.from_numpy(self.lidar).to(torch.float64)
+            self.optimizer.zero_grad()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
 
             # action
-            self.optimizer.zero_grad()
-            action_mean = self.model(state)
+            action_mean = self.model.forward(state)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
@@ -230,6 +230,8 @@ if __name__ == "__main__":
 
     tb = TurtleBot(args_dict)
 
+    print(tb.model.linear1.weight.grad)
+
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
@@ -261,6 +263,9 @@ if __name__ == "__main__":
             loss = torch.mean(loss, dim=0)
             loss = -1 * loss # for gradient ascent
             loss.backward()
+
+            print(tb.model.linear1.weight.grad)
+
             tb.optimizer.step()
             et = time.time()
             
@@ -276,7 +281,14 @@ if __name__ == "__main__":
                 else:
                     os.makedirs(dir_path)
                 tb.args_dict['load_model'] = dir_path + time_string + str(i) + ".pt"
-                torch.save(tb.model, dir_path + time_string + str(i) + ".pt")
+
+                # torch.save(tb.model, dir_path + time_string + str(i) + ".pt")
+
+                torch.save({
+                    'model_state_dict': tb.model.state_dict(),
+                    'optimizer_state_dict': tb.optimizer.state_dict()
+                    }, dir_path + time_string + str(i) + ".pt")
+
                 args_file = open(dir_path + time_string + str(i) + ".json", 'w')
                 args_json = json.dumps(tb.args_dict)
                 args_file.write(args_json)
