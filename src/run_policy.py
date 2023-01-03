@@ -15,8 +15,6 @@ from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 
-from test_pytorch import Actor
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -43,6 +41,7 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
+        output = output / 2
         return output
 
 
@@ -84,16 +83,19 @@ class TurtleBot:
         self.load_model = args_dict['load_model']
         self.wall_dist = args_dict['wall_dist']
        
-        self.model = None
+        self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+        self.optimizer = None
+
         if self.load_model == '':
-            print("Initializing model...")
-            self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+            print("Initialising model...")
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            pass
         else:
-            print("loading model...")
-            self.model = torch.load(self.load_model)
-
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
-
+            print("loading saved model...")
+            checkpoint = torch.load(self.load_model)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -151,13 +153,15 @@ class TurtleBot:
         # penalty for not avoiding the wall
         fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
         fwd_lidar -= self.wall_dist
-        fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
+        fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
         fwd_lidar = np.sum(fwd_lidar)
         
-        if fwd_lidar < -1:
-            terminate = True
+        if fwd_lidar >= -1:
+            reward += self.p_reward
+        else:
             reward += self.n_reward
+            terminate = True
 
         return reward, terminate
 
@@ -179,19 +183,20 @@ class TurtleBot:
         dist   = 0
 
         for t in range(self.max_time_steps):
-            # state
-            state = torch.from_numpy(self.lidar).to(torch.float64)
+            self.optimizer.zero_grad()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
+            state = (state - 0.15) / (3.5 - 0.15)
 
             # action
-            action_mean = self.model.forward(state)
+            action_mean = self.model(state)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
             # os.system("rosservice call /gazebo/pause_physics")
@@ -209,14 +214,14 @@ class TurtleBot:
             if terminate:
                 break
 
-        reward_rollout = torch.unsqueeze(torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64), dim=1)
-
-        # normalize rewards between 0 and 1
-        prob_rollout   = torch.unsqueeze(torch.tensor(prob_rollout, requires_grad=True, dtype=torch.float64), dim=1)
+        # normalise rewards between 0 and 1
+        reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
+        prob_rollout = torch.cat(prob_rollout, dim=0)
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
         return (prob_rollout, reward_rollout)
+
 
 
 if __name__ == "__main__":
@@ -239,6 +244,7 @@ if __name__ == "__main__":
     while not rospy.is_shutdown ():
         with torch.no_grad():
             state = torch.from_numpy(tb.lidar).to(torch.float64)
+            state = (state - 0.15) / (3.5 - 0.15)
             action_mean = tb.model.forward(state)
             tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
             print(action_mean.data)

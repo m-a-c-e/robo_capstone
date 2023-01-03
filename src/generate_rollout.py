@@ -15,8 +15,6 @@ from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 
-from test_pytorch import Actor
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -43,6 +41,7 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
+        output = output / 2
         return output
 
 
@@ -89,7 +88,7 @@ class TurtleBot:
 
         if self.load_model == '':
             print("Initialising model...")
-            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
             pass
         else:
             print("loading saved model...")
@@ -154,13 +153,15 @@ class TurtleBot:
         # penalty for not avoiding the wall
         fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
         fwd_lidar -= self.wall_dist
-        fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
+        fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
         fwd_lidar = np.sum(fwd_lidar)
         
-        if fwd_lidar < -1:
-            terminate = True
+        if fwd_lidar >= -1:
+            reward += self.p_reward
+        else:
             reward += self.n_reward
+            terminate = True
 
         return reward, terminate
 
@@ -186,9 +187,11 @@ class TurtleBot:
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
+            state = (state - 0.15) / (3.5 - 0.15)
 
             # action
-            action_mean = self.model.forward(state)
+            action_mean = self.model(state)
+            print(action_mean.data)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
@@ -212,10 +215,9 @@ class TurtleBot:
             if terminate:
                 break
 
-        reward_rollout = torch.unsqueeze(torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64), dim=1)
-
         # normalize rewards between 0 and 1
-        prob_rollout   = torch.unsqueeze(torch.tensor(prob_rollout, requires_grad=True, dtype=torch.float64), dim=1)
+        reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
+        prob_rollout = torch.cat(prob_rollout, dim=0)
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
@@ -229,8 +231,6 @@ if __name__ == "__main__":
     json_file.close()
 
     tb = TurtleBot(args_dict)
-
-    print(tb.model.linear1.weight.grad)
 
     ### need some time to initialize the lidar readings
     time.sleep(1)
@@ -260,11 +260,9 @@ if __name__ == "__main__":
 
             # 3. multiply reward with the log probs
             loss = cum_reward_rollout * torch.log(prob_rollout)
-            loss = torch.mean(loss, dim=0)
+            loss = torch.mean(loss)
             loss = -1 * loss # for gradient ascent
             loss.backward()
-
-            print(tb.model.linear1.weight.grad)
 
             tb.optimizer.step()
             et = time.time()
