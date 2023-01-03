@@ -15,8 +15,6 @@ from geometry_msgs.msg import Vector3
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 
-from test_pytorch import Actor
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -85,13 +83,19 @@ class TurtleBot:
         self.load_model = args_dict['load_model']
         self.wall_dist = args_dict['wall_dist']
        
+        self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+        self.optimizer = None
+
         if self.load_model == '':
-            self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
+            print("Initialising model...")
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            pass
         else:
-            self.model = torch.load(self.load_model)
-
-        self.optimizer = optim.SGD(self.model.parameters(), lr=0.001, momentum=0.9)
-
+            print("loading saved model...")
+            checkpoint = torch.load(self.load_model)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def set_velocity(self, v_in, w_in):
         # set the linear and/or angular velocity
@@ -137,21 +141,29 @@ class TurtleBot:
         left_lidar = np.abs(left_lidar - self.wall_dist) # get the distance to wall
         dist_mu = np.mean(left_lidar)
         reward = 0
+        terminate = False
 
         # reward for staying parallel to the wall
         if dist_mu < self.allowed_error:
             reward += self.p_reward
         else:
             reward += self.n_reward
+            terminate = True
 
         # penalty for not avoiding the wall
         fwd_lidar = np.array([curr_lidar[1], curr_lidar[0], curr_lidar[359]])
         fwd_lidar -= self.wall_dist
-        fwd_lidar = np.where(fwd_lidar < 0, -1, 1)
+        fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
-        reward += np.sum(fwd_lidar)
+        fwd_lidar = np.sum(fwd_lidar)
+        
+        if fwd_lidar >= -1:
+            reward += self.p_reward
+        else:
+            reward += self.n_reward
+            terminate = True
 
-        return reward
+        return reward, terminate
 
     def generate_rollout(self):
         i = 0
@@ -171,58 +183,44 @@ class TurtleBot:
         dist   = 0
 
         for t in range(self.max_time_steps):
-            time_start = time.time()
+            self.optimizer.zero_grad()
 
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
-            state = state
+            state = (state - 0.15) / (3.5 - 0.15)
 
             # action
-            action_mean = self.model.forward(state)
+            action_mean = self.model(state)
+            print(action_mean.data)
             action = torch.normal(action_mean, self.sigma)
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
             # take action in the simulation
-            action = action.cpu()
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
             # os.system("rosservice call /gazebo/pause_physics")
             # time step ~ 1.08 seconds
             time.sleep(1)
 
-            currx = round(self.globalPos.x, 2)
-            curry = round(self.globalPos.y, 2)
-            dist = math.sqrt((currx - startx)**2 + (curry - starty)**2)
-            startx = currx
-            starty = curry
-
-    
             # collect reward from taking the action
-            reward = 0
-            if dist <= 0.001:
-                reward = 0      # in case of collision
-            else:
-                reward = self.get_reward() # in all other cases
+            reward, terminate = self.get_reward() # in all other cases
 
             # store reward and probabilities for each time step
             reward_rollout.append(reward)
             prob_rollout.append(prob)
 
-            time_end = time.time()
-            ts       = time_end - time_start
-            time_step_list.append(ts)
-            # print("Iteration {}, action {}".format(t, action.data))
-
-        time_step_list = torch.mean(torch.tensor(time_step_list, dtype=torch.float64))
-        reward_rollout = torch.unsqueeze(torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64), dim=1)
+            # decide whether to end rollout or not
+            if terminate:
+                break
 
         # normalize rewards between 0 and 1
-        prob_rollout   = torch.unsqueeze(torch.tensor(prob_rollout, requires_grad=True, dtype=torch.float64), dim=1)
+        reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
+        prob_rollout = torch.cat(prob_rollout, dim=0)
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
-        # return state, action, reward tuple
         return (prob_rollout, reward_rollout)
 
 if __name__ == "__main__":
@@ -230,14 +228,14 @@ if __name__ == "__main__":
     json_file = args[1]
     json_file = open(json_file,"r")
     args_dict = json.load(json_file)
-    #print(args_dict['n_reward'])
+    json_file.close()
 
     tb = TurtleBot(args_dict)
 
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-    iterations = 8000
+    iterations = 200000
     state_rollout = None
     action_rollout = None
     reward_rollout = None
@@ -261,17 +259,16 @@ if __name__ == "__main__":
                 cum_reward_rollout[j] = cum_reward 
 
             # 3. multiply reward with the log probs
-            cum_reward_rollout = cum_reward_rollout
             loss = cum_reward_rollout * torch.log(prob_rollout)
-            loss = torch.mean(loss, dim=0)
+            loss = torch.mean(loss)
             loss = -1 * loss # for gradient ascent
             loss.backward()
+
             tb.optimizer.step()
-            tb.optimizer.zero_grad()
             et = time.time()
             
             # 4. print metrics
-            print("Iteration # : {}    Mean Reward: {}  Time: {}".format(i, torch.mean(reward_rollout).data, round(et - st, 2)))
+            print("Iteration # : {} Mean Reward: {}  Timesteps: {}".format(i, torch.mean(reward_rollout).data, T_terminal))
             if i % 100 == 0: 
                 now = datetime.now()
                 date_string = now.strftime("%d-%m-%Y/")
@@ -282,12 +279,18 @@ if __name__ == "__main__":
                 else:
                     os.makedirs(dir_path)
                 tb.args_dict['load_model'] = dir_path + time_string + str(i) + ".pt"
-                torch.save(tb.model, dir_path + time_string + str(i) + ".pt")
+
+                # torch.save(tb.model, dir_path + time_string + str(i) + ".pt")
+
+                torch.save({
+                    'model_state_dict': tb.model.state_dict(),
+                    'optimizer_state_dict': tb.optimizer.state_dict()
+                    }, dir_path + time_string + str(i) + ".pt")
+
                 args_file = open(dir_path + time_string + str(i) + ".json", 'w')
                 args_json = json.dumps(tb.args_dict)
                 args_file.write(args_json)
                 args_file.close()
-
 
         os.system("rosservice call /gazebo/reset_simulation")    
     os.system("rosservice call /gazebo/reset_simulation")    
