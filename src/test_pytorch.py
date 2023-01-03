@@ -13,25 +13,43 @@ class Actor(nn.Module):
         self.state_size = state_size
         self.action_size = action_size
         self.linear1 = nn.Linear(self.state_size, 128)
-        self.linear2 = nn.Linear(128, 64)
-        self.linear3 = nn.Linear(64, self.action_size)
+        self.linear2 = nn.Linear(128, 128)
+        self.linear3 = nn.Linear(128, self.action_size)
 
     def forward(self, state):
         output = F.relu(self.linear1(state))
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
-        output = F.softmax(output, dim=-1)
+        output = torch.tanh(output)
         return output
 
 if __name__ == "__main__":
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(device)
-    ac = Actor(360, 11)
-    ac = ac.to('cuda:0')
-    ac = ac.to(torch.float64)
-    lidar = torch.arange(360)
-    lidar = lidar.to(torch.float64)
-    lidar = torch.unsqueeze(lidar, dim=0)
+    print("pytorch version: ", torch.__version__)
+    prob_rollout   = []
+    state_rollout = []
 
-    ans = ac(lidar)
-    print(torch.sum(ans))
+    ac = Actor(360, 1)
+    ac = ac.to(torch.float64)
+
+    lidar1 = torch.arange(360)
+    lidar2 = torch.arange(360) / 10
+    lidar1 = torch.unsqueeze(lidar1.to(torch.float64), dim=0)
+    lidar2 = torch.unsqueeze(lidar2.to(torch.float64), dim=0)
+
+    # input
+    state_rollout = torch.cat((lidar1, lidar2), dim=0)
+    print(state_rollout.size())
+
+    # output
+    action_rollout = ac.forward(state_rollout)
+    print(action_rollout.size())
+
+    # prob
+    prob_rollout = action_rollout / 2
+    print(prob_rollout.size())
+
+    print(ac.linear1.weight.grad)
+    loss = torch.mean(prob_rollout)
+    loss.backward()
+    print(ac.linear1.weight.grad)
+
