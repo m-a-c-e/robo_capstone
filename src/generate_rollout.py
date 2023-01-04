@@ -182,7 +182,7 @@ class TurtleBot:
         starty = 0
         dist   = 0
 
-       for t in range(self.max_time_steps):
+        for t in range(self.max_time_steps):
             self.optimizer.zero_grad()
 
             # state
@@ -191,24 +191,23 @@ class TurtleBot:
 
             # action
             action_mean = self.model(state)
-            print(action_mean.data)
-            action = torch.normal(action_mean, self.sigma)
-            prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
+            action = torch.normal(action_mean, self.sigma)  # gaussian sampling
+            action = torch.clamp(action, min=-0.5, max=0.5)
 
             # take action in the simulation
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
+            time.sleep(0.05)
             # os.system("rosservice call /gazebo/pause_physics")
-            # time step ~ 1.08 seconds
-            time.sleep(1)
 
             # collect reward from taking the action
             reward, terminate = self.get_reward() # in all other cases
-
-            # store reward and probabilities for each time step
             reward_rollout.append(reward)
+
+            # store probability of taking that action
+            prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
             prob_rollout.append(prob)
 
             # decide whether to end rollout or not

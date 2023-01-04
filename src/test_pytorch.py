@@ -42,6 +42,7 @@ if __name__ == "__main__":
 
     # output
     action_rollout = ac.forward(state_rollout)
+    action_rollout = torch.clamp(action_rollout, min=-0.5, max=0.5)
     print(action_rollout.size())
 
     # prob

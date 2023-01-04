@@ -88,13 +88,13 @@ class TurtleBot:
 
         if self.load_model == '':
             print("Initialising model...")
-            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
             pass
         else:
             print("loading saved model...")
             checkpoint = torch.load(self.load_model)
             self.model.load_state_dict(checkpoint['model_state_dict'])
-            self.optimizer = optim.Adam(self.model.parameters(), lr=0.01)
+            self.optimizer = optim.Adam(self.model.parameters(), lr=0.001)
             self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
     def set_velocity(self, v_in, w_in):
@@ -248,6 +248,6 @@ if __name__ == "__main__":
             action_mean = tb.model.forward(state)
             tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
             print(action_mean.data)
-
             time.sleep(1)
+
     os.system("rosservice call /gazebo/reset_simulation")    
