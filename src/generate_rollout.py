@@ -165,7 +165,7 @@ class TurtleBot:
 
         return reward, terminate
 
-    def generate_rollout(self, eval_time_steps):
+    def generate_rollout(self):
         i = 0
         reward_rollout = []
         action_rollout = []
@@ -182,6 +182,9 @@ class TurtleBot:
         starty = 0
         dist   = 0
 
+        st = 0
+        time_list = []
+
         for t in range(self.max_time_steps):
             self.optimizer.zero_grad()
 
@@ -191,15 +194,16 @@ class TurtleBot:
 
             # action
             action_mean = self.model(state)
+
             action = torch.normal(action_mean, self.sigma)  # gaussian sampling
             action = torch.clamp(action, min=-0.5, max=0.5)
-
+            
             # take action in the simulation
             self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
-            time.sleep(0.05)
+            time.sleep(0.0213)      # for 5.5x speed up in gazebo
             # os.system("rosservice call /gazebo/pause_physics")
 
             # collect reward from taking the action
@@ -213,7 +217,7 @@ class TurtleBot:
             # decide whether to end rollout or not
             if terminate:
                 break
-
+        
         # normalize rewards between 0 and 1
         reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
         prob_rollout = torch.cat(prob_rollout, dim=0)
@@ -234,19 +238,27 @@ if __name__ == "__main__":
     ### need some time to initialize the lidar readings
     time.sleep(1)
     ############################
-    iterations = 200000
+
+    iterations = 20000
+
+    devisor = iterations / 4
+
+    sigma_schedular = np.arange(0.01, tb.sigma + 0.1, (tb.sigma + 0.1 - 0.01) / 4)
+    sigma_schedular = np.flip(sigma_schedular)
+
     state_rollout = None
     action_rollout = None
     reward_rollout = None
     gamma = torch.tensor(0.99, dtype=torch.float64, requires_grad=False)
-    st = None
-    eval_time_steps = 0
 
     while not rospy.is_shutdown ():
         for i in range(iterations):
-            st = time.time()
+            # sigma setter
+            sigma_idx = i // devisor
+            tb.sigma = sigma_schedular[sigma_idx]
+
             # 1. generate rollout
-            prob_rollout, reward_rollout = tb.generate_rollout(eval_time_steps)
+            prob_rollout, reward_rollout = tb.generate_rollout()
             cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
             
             # 2. calculate expected cummulative reward
@@ -265,7 +277,6 @@ if __name__ == "__main__":
             loss.backward()
 
             tb.optimizer.step()
-            et = time.time()
             
             # 4. print metrics
             print("Iteration # : {} Mean Reward: {}  Timesteps: {}".format(i, torch.mean(reward_rollout).data, T_terminal))
@@ -292,6 +303,5 @@ if __name__ == "__main__":
                 args_file.write(args_json)
                 args_file.close()
 
-        os.system("rosservice call /gazebo/reset_simulation")    
+        break
     os.system("rosservice call /gazebo/reset_simulation")    
-os.system("rosservice call /gazebo/reset_simulation")    

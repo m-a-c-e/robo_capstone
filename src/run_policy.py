@@ -247,7 +247,7 @@ if __name__ == "__main__":
             state = (state - 0.15) / (3.5 - 0.15)
             action_mean = tb.model.forward(state)
             tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
-            print(action_mean.data)
-            time.sleep(1)
+            time.sleep(0.036)
 
+    json_file.close()
     os.system("rosservice call /gazebo/reset_simulation")    
