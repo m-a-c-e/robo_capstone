@@ -41,7 +41,9 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output = output / 2
+        output[0][0] = output[0][0] / 2
+        output[0][1] = (output[0][1] + 1) / 20
+
         return output
 
 
@@ -66,7 +68,7 @@ class TurtleBot:
 
         self.lidar            = np.zeros(360)
 
-        self.num_actions      = 1
+        self.num_actions      = 2
             
 
         # params
@@ -189,17 +191,18 @@ class TurtleBot:
             self.optimizer.zero_grad()
 
             # state
-            state = torch.from_numpy(self.lidar).to(torch.float64)
+            state = torch.unsqueeze(torch.from_numpy(self.lidar).to(torch.float64), dim=0)
             state = (state - 0.15) / (3.5 - 0.15)
 
             # action
             action_mean = self.model(state)
 
             action = torch.normal(action_mean, self.sigma)  # gaussian sampling
-            action = torch.clamp(action, min=-0.5, max=0.5)
+            action[0][0] = torch.clamp(action[0][0], min=0, max=0.1)
+            action[0][1] = torch.clamp(action[0][1], min=-0.5, max=0.5)
             
             # take action in the simulation
-            self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+            self.set_velocity([action[0][0].data, 0, 0],[0, 0, action[0][1].data]) 
 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
@@ -212,15 +215,19 @@ class TurtleBot:
 
             # store probability of taking that action
             prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
             prob_rollout.append(prob)
 
             # decide whether to end rollout or not
             if terminate:
                 break
-        
+
         # normalize rewards between 0 and 1
         reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
         prob_rollout = torch.cat(prob_rollout, dim=0)
+
+        loss = torch.mean(prob_rollout)
+        loss.backward()
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
@@ -269,6 +276,7 @@ if __name__ == "__main__":
                     diff = torch.tensor(k - j, dtype=torch.float64, requires_grad=False)
                     cum_reward += torch.pow(gamma, diff) * reward_rollout[j] 
                 cum_reward_rollout[j] = cum_reward 
+            cum_reward_rollout = cum_reward_rollout.repeat(1, 2)
 
             # 3. multiply reward with the log probs
             loss = cum_reward_rollout * torch.log(prob_rollout)
@@ -302,6 +310,5 @@ if __name__ == "__main__":
                 args_json = json.dumps(tb.args_dict)
                 args_file.write(args_json)
                 args_file.close()
-
         break
     os.system("rosservice call /gazebo/reset_simulation")    
