@@ -22,8 +22,10 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        #out1 = torch.unsqueeze(output[0][0])
-        return output
+        lin_out = torch.unsqueeze((output[0][0] + 1) / 20, dim=0)
+        ang_out = torch.unsqueeze(output[0][1] / 2, dim=0)
+
+        return lin_out, ang_out
 
 if __name__ == "__main__":
     print("pytorch version: ", torch.__version__)
@@ -33,44 +35,30 @@ if __name__ == "__main__":
     ac = Actor(360, 2)
     ac = ac.to(torch.float64)
 
-
     # input
     lidar1 = torch.arange(360)
     lidar2 = torch.arange(360) / 10
     lidar1 = torch.unsqueeze(lidar1.to(torch.float64), dim=0)
     lidar2 = torch.unsqueeze(lidar2.to(torch.float64), dim=0)
-    #print(lidar1.size())
 
     # output
     out = []
-    out1 = ac(lidar1)
-    
-    lin = torch.unsqueeze(out1[0][0], dim=0)
-    lin = lin / 2
+    lin_out, ang_out = ac(lidar1)
+    actions = torch.cat((lin_out, ang_out))
+    actions = torch.unsqueeze(actions, dim=0)
+    out.append(actions)
 
-    ang = torch.unsqueeze(out1[0][1], dim=0)
-    ang = (ang + 1) / 20
+    lin_out, ang_out = ac(lidar2)
+    actions = torch.cat((lin_out, ang_out))
+    actions = torch.unsqueeze(actions, dim=0)
+    out.append(actions)
 
-    out.append(lin)
-    out.append(ang)
-    out = torch.cat(out)
+    out = torch.cat(out, dim=0)
+
     print(out.size())
-
+    
     # gradient check
     print(ac.linear1.weight.grad)
     loss = torch.mean(out)
-    print(loss)
     loss.backward()
     print(ac.linear1.weight.grad)
-    
-    exit()
-
-    out = torch.cat(out)
-
-    # prob
-    print(ac.linear1.weight.grad)
-    loss = torch.mean(out)
-    print(loss)
-    loss.backward()
-    print(ac.linear1.weight.grad)
-
