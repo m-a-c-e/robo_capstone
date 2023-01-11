@@ -41,10 +41,9 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output[0][0] = output[0][0] / 2
-        output[0][1] = (output[0][1] + 1) / 20
-
-        return output
+        lin_out = torch.unsqueeze((output[0] + 1) / 20, dim=0)
+        ang_out = torch.unsqueeze(output[1] / 2, dim=0)
+        return lin_out, ang_out
 
 
 class TurtleBot:
@@ -133,9 +132,7 @@ class TurtleBot:
         self.globalPos.y = Mrot.item((1,0))*position.x + Mrot.item((1,1))*position.y - self.Init_pos.y		# meters
         self.globalAng = orientation - self.Init_ang			# radians
 
-
-
-    def get_reward(self):
+    def get_reward(self, linear_vel):
         curr_lidar = np.array(self.lidar)
         left_lidar = np.array(curr_lidar[self.lidar_start:self.lidar_end])
         ang_comp = np.cos(np.arange(-2, 3, 1) * np.pi / 180)
@@ -158,14 +155,17 @@ class TurtleBot:
         fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
         fwd_lidar = np.sum(fwd_lidar)
-        
+
+        lin_reward = linear_vel * 10
         if fwd_lidar >= -1:
             reward += self.p_reward
         else:
             reward += self.n_reward
+
+            lin_reward += self.n_reward
             terminate = True
 
-        return reward, terminate
+        return reward, terminate, lin_reward
 
     def generate_rollout(self):
         i = 0
@@ -188,21 +188,29 @@ class TurtleBot:
         time_list = []
 
         for t in range(self.max_time_steps):
-            self.optimizer.zero_grad()
 
+            self.optimizer.zero_grad()
+            
             # state
-            state = torch.unsqueeze(torch.from_numpy(self.lidar).to(torch.float64), dim=0)
+            state = torch.from_numpy(self.lidar).to(torch.float64)
             state = (state - 0.15) / (3.5 - 0.15)
 
-            # action
-            action_mean = self.model(state)
+            # actions
+            #action_mean = self.model(state)
+            lin_mean, ang_mean = self.model(state)
 
-            action = torch.normal(action_mean, self.sigma)  # gaussian sampling
-            action[0][0] = torch.clamp(action[0][0], min=0, max=0.1)
-            action[0][1] = torch.clamp(action[0][1], min=-0.5, max=0.5)
-            
+            # sample actions
+            #action = torch.normal(action_mean, self.sigma)  # gaussian sampling
+            #action = torch.clamp(action, min=0, max=0.1)
+            lin_action = torch.normal(lin_mean, self.sigma / 10)  # gaussian sampling
+            lin_action = torch.clamp(lin_action, min=0, max=0.1)
+            ang_action = torch.normal(ang_mean, self.sigma)  # gaussian sampling
+            ang_action = torch.clamp(ang_action, min=-0.5, max=0.5)
+
+
+
             # take action in the simulation
-            self.set_velocity([action[0][0].data, 0, 0],[0, 0, action[0][1].data]) 
+            self.set_velocity([lin_action.data, 0, 0],[0, 0, ang_action.data]) 
 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
@@ -210,12 +218,18 @@ class TurtleBot:
             # os.system("rosservice call /gazebo/pause_physics")
 
             # collect reward from taking the action
-            reward, terminate = self.get_reward() # in all other cases
-            reward_rollout.append(reward)
+            reward, terminate, lin_reward = self.get_reward(lin_action) # in all other cases
+            reward_rollout.append([lin_reward, reward])
 
             # store probability of taking that action
-            prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
+            #prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
 
+            lin_prob = 1 / (4.443 * self.sigma * torch.exp((lin_action - lin_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
+            ang_prob = 1 / (4.443 * self.sigma * torch.exp((ang_action - ang_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
+            prob = torch.cat((lin_prob, ang_prob))
+            prob = torch.unsqueeze(prob, dim=0)
             prob_rollout.append(prob)
 
             # decide whether to end rollout or not
@@ -225,9 +239,6 @@ class TurtleBot:
         # normalize rewards between 0 and 1
         reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
         prob_rollout = torch.cat(prob_rollout, dim=0)
-
-        loss = torch.mean(prob_rollout)
-        loss.backward()
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
@@ -267,23 +278,25 @@ if __name__ == "__main__":
             # 1. generate rollout
             prob_rollout, reward_rollout = tb.generate_rollout()
             cum_reward_rollout = torch.empty(reward_rollout.size(), requires_grad=False, dtype=torch.float64)
-            
+
             # 2. calculate expected cummulative reward
             T_terminal = reward_rollout.size()[0]
             for j in range(T_terminal):
-                cum_reward = 0
+                cum_reward_lin = 0
+                cum_reward_ang = 0
                 for k in range(j, T_terminal):
                     diff = torch.tensor(k - j, dtype=torch.float64, requires_grad=False)
-                    cum_reward += torch.pow(gamma, diff) * reward_rollout[j] 
-                cum_reward_rollout[j] = cum_reward 
-            cum_reward_rollout = cum_reward_rollout.repeat(1, 2)
+                    cum_reward_lin += torch.pow(gamma, diff) * reward_rollout[j][0]
+                    cum_reward_ang += torch.pow(gamma, diff) * reward_rollout[j][1]
+
+                cum_reward_rollout[j][0] = cum_reward_lin
+                cum_reward_rollout[j][1] = cum_reward_ang
 
             # 3. multiply reward with the log probs
             loss = cum_reward_rollout * torch.log(prob_rollout)
             loss = torch.mean(loss)
             loss = -1 * loss # for gradient ascent
             loss.backward()
-
             tb.optimizer.step()
             
             # 4. print metrics

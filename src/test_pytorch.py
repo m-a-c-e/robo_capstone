@@ -22,9 +22,8 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        lin_out = torch.unsqueeze((output[0][0] + 1) / 20, dim=0)
-        ang_out = torch.unsqueeze(output[0][1] / 2, dim=0)
-
+        lin_out = torch.unsqueeze((output[0] + 1) / 20, dim=0)
+        ang_out = torch.unsqueeze(output[1] / 2, dim=0)
         return lin_out, ang_out
 
 if __name__ == "__main__":
@@ -38,8 +37,8 @@ if __name__ == "__main__":
     # input
     lidar1 = torch.arange(360)
     lidar2 = torch.arange(360) / 10
-    lidar1 = torch.unsqueeze(lidar1.to(torch.float64), dim=0)
-    lidar2 = torch.unsqueeze(lidar2.to(torch.float64), dim=0)
+    lidar1 = lidar1.to(torch.float64)
+    lidar2 = lidar2.to(torch.float64)
 
     # output
     out = []
