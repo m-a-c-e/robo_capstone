@@ -196,7 +196,6 @@ class TurtleBot:
             state = (state - 0.15) / (3.5 - 0.15)
 
             # actions
-            #action_mean = self.model(state)
             lin_mean, ang_mean = self.model(state)
 
             # sample actions
