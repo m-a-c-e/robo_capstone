@@ -41,8 +41,9 @@ class Actor(nn.Module):
         output = F.relu(self.linear2(output))
         output = self.linear3(output)
         output = torch.tanh(output)
-        output = output / 2
-        return output
+        lin_out = torch.unsqueeze((output[0] + 1) / 20, dim=0)
+        ang_out = torch.unsqueeze(output[1] / 2, dim=0)
+        return lin_out, ang_out
 
 
 class TurtleBot:
@@ -66,7 +67,7 @@ class TurtleBot:
 
         self.lidar            = np.zeros(360)
 
-        self.num_actions      = 1
+        self.num_actions      = 2
             
 
         # params
@@ -82,7 +83,7 @@ class TurtleBot:
         self.max_time_steps = args_dict['max_time_steps']
         self.load_model = args_dict['load_model']
         self.wall_dist = args_dict['wall_dist']
-      
+       
         self.model = Actor(self.lidar.size, self.num_actions).to(torch.float64)
         self.optimizer = None
 
@@ -131,9 +132,7 @@ class TurtleBot:
         self.globalPos.y = Mrot.item((1,0))*position.x + Mrot.item((1,1))*position.y - self.Init_pos.y		# meters
         self.globalAng = orientation - self.Init_ang			# radians
 
-
-
-    def get_reward(self):
+    def get_reward(self, linear_vel):
         curr_lidar = np.array(self.lidar)
         left_lidar = np.array(curr_lidar[self.lidar_start:self.lidar_end])
         ang_comp = np.cos(np.arange(-2, 3, 1) * np.pi / 180)
@@ -156,14 +155,17 @@ class TurtleBot:
         fwd_lidar = np.where(fwd_lidar < 0, -1, 0)
 
         fwd_lidar = np.sum(fwd_lidar)
-        
+
+        lin_reward = linear_vel * 10
         if fwd_lidar >= -1:
             reward += self.p_reward
         else:
             reward += self.n_reward
+
+            lin_reward += self.n_reward
             terminate = True
 
-        return reward, terminate
+        return reward, terminate, lin_reward
 
     def generate_rollout(self):
         i = 0
@@ -182,47 +184,65 @@ class TurtleBot:
         starty = 0
         dist   = 0
 
-        for t in range(self.max_time_steps):
-            self.optimizer.zero_grad()
+        st = 0
+        time_list = []
 
+        for t in range(self.max_time_steps):
+
+            self.optimizer.zero_grad()
+            
             # state
             state = torch.from_numpy(self.lidar).to(torch.float64)
             state = (state - 0.15) / (3.5 - 0.15)
 
-            # action
-            action_mean = self.model(state)
-            action = torch.normal(action_mean, self.sigma)
-            prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
+            # actions
+            #action_mean = self.model(state)
+            lin_mean, ang_mean = self.model(state)
+
+            # sample actions
+            #action = torch.normal(action_mean, self.sigma)  # gaussian sampling
+            #action = torch.clamp(action, min=0, max=0.1)
+            lin_action = torch.normal(lin_mean, self.sigma / 10)  # gaussian sampling
+            lin_action = torch.clamp(lin_action, min=0, max=0.1)
+            ang_action = torch.normal(ang_mean, self.sigma)  # gaussian sampling
+            ang_action = torch.clamp(ang_action, min=-0.5, max=0.5)
+
+
 
             # take action in the simulation
-            self.set_velocity([self.cnst_vel, 0, 0],[0, 0, action.data]) 
+            self.set_velocity([lin_action.data, 0, 0],[0, 0, ang_action.data]) 
 
             # os.system("rosservice call /gazebo/unpause_physics")
             # os.system("gz world --step")
+            time.sleep(0.0213)      # for 5.5x speed up in gazebo
             # os.system("rosservice call /gazebo/pause_physics")
-            # time step ~ 1.08 seconds
-            time.sleep(1)
 
             # collect reward from taking the action
-            reward, terminate = self.get_reward() # in all other cases
+            reward, terminate, lin_reward = self.get_reward(lin_action) # in all other cases
+            reward_rollout.append([lin_reward, reward])
 
-            # store reward and probabilities for each time step
-            reward_rollout.append(reward)
+            # store probability of taking that action
+            #prob   = 1 / (4.443 * self.sigma * torch.exp((action - action_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
+            lin_prob = 1 / (4.443 * self.sigma * torch.exp((lin_action - lin_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
+            ang_prob = 1 / (4.443 * self.sigma * torch.exp((ang_action - ang_mean) ** 2 / (2 * self.sigma) ** 2)) 
+
+            prob = torch.cat((lin_prob, ang_prob))
+            prob = torch.unsqueeze(prob, dim=0)
             prob_rollout.append(prob)
 
             # decide whether to end rollout or not
             if terminate:
                 break
 
-        # normalise rewards between 0 and 1
+        # normalize rewards between 0 and 1
         reward_rollout = torch.tensor(reward_rollout, requires_grad=False, dtype=torch.float64)
         prob_rollout = torch.cat(prob_rollout, dim=0)
 
         # reset simulation once
         os.system("rosservice call /gazebo/reset_simulation")    
         return (prob_rollout, reward_rollout)
-
-
 
 if __name__ == "__main__":
     args = sys.argv
@@ -237,16 +257,12 @@ if __name__ == "__main__":
     time.sleep(1)
     ############################
 
-    startx = 0
-    starty = 0
-    dist = 0
-
     while not rospy.is_shutdown ():
         with torch.no_grad():
             state = torch.from_numpy(tb.lidar).to(torch.float64)
             state = (state - 0.15) / (3.5 - 0.15)
             action_mean = tb.model.forward(state)
-            tb.set_velocity([tb.cnst_vel, 0, 0],[0, 0, action_mean.data]) 
+            tb.set_velocity([action_mean[0], 0, 0],[0, 0, action_mean[1]]) 
             time.sleep(0.036)
 
     json_file.close()
